@@ -247,3 +247,12 @@ That's the real positioning: Loop Pilot isn't a temporary crutch. It's infrastru
 ## License
 
 MIT — Monika Bishnoi, 2026
+
+## Contributing to the Ecosystem
+
+Loop Pilot has been proposed as a contribution to both major agent harness projects:
+
+- **OpenAI Codex:** [RFC: Behavior-memory budget prediction for agent loops](https://github.com/openai/codex/issues/26665)
+- **Anthropic Claude Code:** [Proposal: Behavior-memory budget advisor as pre-loop hook](https://github.com/anthropics/claude-code/issues/65712)
+
+If you're building a custom harness and want to integrate Loop Pilot, see [CONTRIBUTING.md](./CONTRIBUTING.md) or open an issue.
