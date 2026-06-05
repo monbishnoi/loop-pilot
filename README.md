@@ -72,7 +72,7 @@ a tool once enough context is found.
 Use this as operational guidance. Continue to reason normally.
 ```
 
-The model treats this as context, not as a command. High-confidence guidance can be optimized around. Medium-confidence guidance is a planning prior. Low-confidence guidance says the match is weak and tells the model to decompose the task first.
+The model treats this as context, not as a command. High-confidence guidance can be optimized around. Medium-confidence guidance is a planning prior. Low-confidence guidance does **not** show a precise suggested budget in the prompt; it says the match is weak and tells the model to decompose the task first.
 
 ## Quick Start
 

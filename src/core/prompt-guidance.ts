@@ -8,10 +8,14 @@ export function createPromptGuidance(prediction: BudgetPrediction): string {
     ? `${prediction.budgetRange.min}`
     : `${prediction.budgetRange.min}-${prediction.budgetRange.max}`;
   const confidenceNote = confidenceNoteFor(prediction);
+  const budgetLines = budgetLinesFor(prediction, budgetRange);
+  const likelyToolsLabel = prediction.guidanceMode === 'rough-prior'
+    ? 'Tools seen in weakly related runs'
+    : 'Likely useful tools';
   const repeatedTools = prediction.repeatedToolPatterns.length > 0
     ? `\nRepeated-tool caution: similar tasks repeated ${prediction.repeatedToolPatterns.join(', ')}. Avoid repeating a tool once enough context is found.`
     : '';
-  const toolBudget = Object.keys(prediction.toolBudget).length > 0
+  const toolBudget = prediction.guidanceMode !== 'rough-prior' && Object.keys(prediction.toolBudget).length > 0
     ? `\nLikely allocation:\n${Object.entries(prediction.toolBudget)
       .map(([tool, budget]) => `- ${tool}: ${budget} call${budget === 1 ? '' : 's'}`)
       .join('\n')}`
@@ -23,11 +27,10 @@ export function createPromptGuidance(prediction: BudgetPrediction): string {
   return `## Loop Pilot Guidance
 
 Similar past behavior suggests:
-- Suggested tool-call budget: ${prediction.suggestedBudget}
-- Estimated budget range: ${budgetRange}
+${budgetLines}
 - Confidence: ${prediction.confidence}
 - Risk: ${prediction.risk}
-- Likely useful tools: ${likelyTools}
+- ${likelyToolsLabel}: ${likelyTools}
 
 How to use this: ${confidenceNote}
 
@@ -36,6 +39,16 @@ Evidence: top similarity ${prediction.evidence.topSimilarity.toFixed(2)}, averag
 Reason: ${prediction.reason}${toolBudget}${repeatedTools}${failureHints}
 
 Use this as operational guidance. Continue to reason normally.`;
+}
+
+function budgetLinesFor(prediction: BudgetPrediction, budgetRange: string): string {
+  if (prediction.guidanceMode === 'rough-prior') {
+    return `- Reliable budget suggestion: none; historical match is weak
+- Rough budget range only: ${budgetRange}`;
+  }
+
+  return `- Suggested tool-call budget: ${prediction.suggestedBudget}
+- Estimated budget range: ${budgetRange}`;
 }
 
 function confidenceNoteFor(prediction: BudgetPrediction): string {
@@ -47,5 +60,5 @@ function confidenceNoteFor(prediction: BudgetPrediction): string {
     return 'Partial match. Use this as a planning prior, then adjust from the actual task steps.';
   }
 
-  return 'Weak match. Use this only as a rough prior. Decompose the task first; do not optimize around the number or stop early just because the historical average is low.';
+  return 'Weak match. Do not treat Loop Pilot as an instruction here. Decompose the task first and choose the number of steps from the actual requirements.';
 }

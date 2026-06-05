@@ -70,9 +70,7 @@ test('LoopPilot stores, indexes, plans, and generates guidance', async () => {
     assert.ok(Object.keys(plan.prediction.toolBudget).length > 0);
     assert.ok(plan.prediction.likelyTools.length > 0);
     assert.match(plan.promptGuidance, /Loop Pilot Guidance/);
-    assert.match(plan.promptGuidance, /Suggested tool-call budget/);
-    assert.match(plan.promptGuidance, /Estimated budget range/);
-    assert.match(plan.promptGuidance, /Likely allocation/);
+    assert.match(plan.promptGuidance, /Estimated budget range|Rough budget range only/);
     assert.equal(plan.similarEpisodes.some((item) => item.episode.embedding), false);
   } finally {
     await rm(dir, { recursive: true, force: true });
@@ -98,7 +96,10 @@ test('budget predictor does not call weakly similar neighbors high confidence', 
   const guidance = createPromptGuidance(prediction);
   assert.match(guidance, /Weak match/);
   assert.match(guidance, /Decompose the task first/);
-  assert.match(guidance, /do not optimize around the number/);
+  assert.match(guidance, /Reliable budget suggestion: none/);
+  assert.match(guidance, /Do not treat Loop Pilot as an instruction/);
+  assert.doesNotMatch(guidance, /Suggested tool-call budget/);
+  assert.doesNotMatch(guidance, /Likely allocation/);
 });
 
 test('budget predictor requires strong evidence before high confidence', () => {
