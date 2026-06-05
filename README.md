@@ -226,7 +226,13 @@ Loop Pilot implements **"inform, then trust"** — a middle path between blind t
 
 The model receives its budget as context, not as a hard limit. It self-regulates. The harness's existing safety cap remains unchanged as a backstop.
 
-As models get smarter through agentic post-training, they'll need less informing. Loop Pilot's guidance gracefully becomes unnecessary — the harness simplifies to just a safety net. That's the bridge strategy: meet the model where it is today, adapt as it improves.
+### Why not just post-train the model?
+
+Agentic RL post-training (Tool-R1, ARTIST, DAPO) can teach models to internalize tool-call efficiency — but it's excruciatingly expensive and only feasible for foundation model labs training general-purpose models. You can't post-train a frontier model on every custom harness, every private toolset, every unique workflow. The economics don't work.
+
+Loop Pilot gives any custom harness the *behavioral* benefits of post-training — learned iteration patterns, diminishing-returns awareness, tool-specific budgeting — without touching model weights. It runs at the harness layer, learns from *your* logs, and works with any model.
+
+As general-purpose models do get post-trained on agentic efficiency, Loop Pilot's guidance gracefully becomes unnecessary — the harness simplifies to just a safety net. That's the bridge strategy: meet the model where it is today, adapt as it improves.
 
 ## License
 
