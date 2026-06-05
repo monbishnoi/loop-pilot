@@ -227,7 +227,7 @@ Loop Pilot gives any custom harness the *behavioral* benefits of post-training �
 
 As general-purpose models get post-trained on agentic efficiency, they'll internalize *generic* tool-use discipline — when to stop searching, when to write instead of research. Loop Pilot's general budget guidance simplifies for those cases.
 
-But here's the thing: post-training can't cover the long tail. Your custom harness has unique tools, unique workflow shapes, unique patterns of what "success" looks like. No foundation model will ever be trained on *your* specific system. For harness-specific behavioral memory, Loop Pilot remains valuable — indefinitely.
+But here's the thing: post-training can't cover the long tail. Your custom harness has unique tools, unique workflow shapes, unique patterns of what "success" looks like. **No foundation model will ever be trained on *your* specific system.** For harness-specific behavioral memory, Loop Pilot remains valuable — indefinitely.
 
 | Model Generation | Generic tasks | Your custom harness |
 |-----------------|---------------|---------------------|
