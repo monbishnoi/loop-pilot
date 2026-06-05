@@ -69,8 +69,12 @@ test('LoopPilot stores, indexes, plans, and generates guidance', async () => {
     assert.ok(plan.prediction.evidence.totalNeighbors > 0);
     assert.ok(Object.keys(plan.prediction.toolBudget).length > 0);
     assert.ok(plan.prediction.likelyTools.length > 0);
-    assert.match(plan.promptGuidance, /Loop Pilot Guidance/);
-    assert.match(plan.promptGuidance, /Estimated budget range|Rough budget range only/);
+    if (plan.prediction.confidence === 'low') {
+      assert.equal(plan.promptGuidance, '');
+    } else {
+      assert.match(plan.promptGuidance, /Loop Pilot Guidance/);
+      assert.match(plan.promptGuidance, /Estimated budget range/);
+    }
     assert.equal(plan.similarEpisodes.some((item) => item.episode.embedding), false);
   } finally {
     await rm(dir, { recursive: true, force: true });
@@ -94,12 +98,7 @@ test('budget predictor does not call weakly similar neighbors high confidence', 
   assert.ok(prediction.budgetRange.max >= 8);
 
   const guidance = createPromptGuidance(prediction);
-  assert.match(guidance, /Weak match/);
-  assert.match(guidance, /Decompose the task first/);
-  assert.match(guidance, /Reliable budget suggestion: none/);
-  assert.match(guidance, /Do not treat Loop Pilot as an instruction/);
-  assert.doesNotMatch(guidance, /Suggested tool-call budget/);
-  assert.doesNotMatch(guidance, /Likely allocation/);
+  assert.equal(guidance, '');
 });
 
 test('budget predictor requires strong evidence before high confidence', () => {
@@ -119,6 +118,25 @@ test('budget predictor requires strong evidence before high confidence', () => {
     min: prediction.suggestedBudget,
     max: prediction.suggestedBudget,
   });
+});
+
+test('prompt guidance caveats suspiciously low budgets for complex tasks', () => {
+  const similar = [
+    similarEpisode('1', 'Publish short post to website and push changes', ['write_file'], 1, 0.86),
+    similarEpisode('2', 'Create tiny website post then commit and push', ['write_file'], 1, 0.82),
+    similarEpisode('3', 'Update website HTML and push to GitHub', ['write_file', 'git'], 2, 0.8),
+    similarEpisode('4', 'Publish article page and commit website', ['write_file'], 1, 0.78),
+    similarEpisode('5', 'Post blog HTML update to website repo', ['write_file'], 1, 0.76),
+  ];
+
+  const prediction = predictBudget(similar, { task: 'Publish the Loop Pilot blog post and push it to the website' });
+  const guidance = createPromptGuidance(prediction);
+
+  assert.equal(prediction.confidence, 'high');
+  assert.ok(prediction.suggestedBudget <= 3);
+  assert.match(guidance, /Suggested tool-call budget/);
+  assert.match(guidance, /looks complex for such a small budget/);
+  assert.match(guidance, /use more steps if the task requires them/);
 });
 
 test('benchmark compares fixed budget to Loop Pilot predictions', async () => {
