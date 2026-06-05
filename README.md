@@ -163,28 +163,21 @@ Loop Pilot does **not** ship an embedding model. Your harness provides embedding
 
 ## Architecture
 
-```
-looppilot/
-├── src/
-│   ├── core/
-│   │   ├── types.ts            # Episode, Plan, Prediction interfaces
-│   │   ├── sqlite-store.ts     # SQLite-backed episode memory
-│   │   ├── embeddings.ts       # Pluggable embedding providers
-│   │   ├── similarity.ts       # KNN similarity search
-│   │   ├── budget-predictor.ts # Statistical budget prediction
-│   │   ├── prompt-guidance.ts  # Guidance block generator
-│   │   ├── collections.ts      # Auto-discovery of harness logs
-│   │   ├── benchmark.ts        # Leave-one-out benchmarking
-│   │   └── loop-pilot.ts       # Orchestrator (plan, record, import)
-│   ├── adapters/
-│   │   └── jsonl-events/       # Parser for JSONL event logs
-│   ├── server/
-│   │   ├── http.ts             # HTTP server
-│   │   └── mcp.ts              # MCP server
-│   └── cli/
-│       └── index.ts            # CLI entry point
-└── test/
-```
+Loop Pilot operates in two modes:
+
+### Pre-Loop: Prediction & Guidance
+
+![Pre-Loop Architecture](assets/architecture-pre-loop.svg)
+
+Before the agent loop starts, Loop Pilot embeds the task, finds similar past episodes via KNN, predicts a tool budget, and injects guidance into the system prompt. The model self-regulates. When the loop completes, the episode feeds back into memory for future predictions.
+
+### Mid-Loop: Real-Time Steering
+
+![Mid-Loop Architecture](assets/architecture-mid-loop.svg)
+
+During the agent loop, Loop Pilot monitors the trajectory as it unfolds — comparing the current sequence of tool calls against successful past episodes. If the agent is drifting (repeating tools, diverging from patterns that worked), it injects a real-time nudge. If it's on track, it stays silent. If it's hitting diminishing returns, it suggests wrapping up.
+
+The philosophy stays the same in both modes: inform, then trust. Never override. Never halt. Just surface the signal the model can't see on its own.
 
 ## Benchmarking
 

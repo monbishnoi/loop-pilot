@@ -1,7 +1,7 @@
 {
   "name": "looppilot",
   "version": "0.1.0",
-  "description": "Orchestration for autonomous agent loops.",
+  "description": "Trajectory optimization engine for custom agent harnesses. Learns from past runs, predicts tool budgets, and injects guidance.",
   "type": "module",
   "main": "dist/src/index.js",
   "types": "dist/src/index.d.ts",
