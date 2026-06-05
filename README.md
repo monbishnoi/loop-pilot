@@ -1,125 +1,233 @@
 # Loop Pilot
 
-Loop Pilot is a trajectory optimization engine for custom agent harnesses. It learns from past runs, predicts tool budgets, and injects guidance so loops do not drift, waste calls, or exhaust early.
+**A trajectory optimization engine for custom agent harnesses.**
+
+Learns from past runs, predicts tool budgets, and injects guidance — so loops don't drift, waste calls, or exhaust early.
 
 > Mission control for agent trajectories.
 
-Phase 1 turns agent runtime logs into behavior episodes, embeds those episodes, finds similar past tasks with KNN, and returns a budget plus prompt guidance before the next agent loop starts.
+---
 
-## Simple Architecture
+## The Problem
+
+Every agent harness has a loop: call the model → model requests a tool → execute tool → repeat. The question is: when should the loop stop?
+
+**Most harnesses pick one of two bad options:**
+
+1. **No limit** — trust the model to self-regulate. It doesn't. It researches forever because RLHF trained it to be thorough, not efficient. The context window explodes.
+
+2. **Hard cap** — cut the model off after N iterations regardless of task complexity. A simple lookup and a complex write task get the same budget. The model doesn't know it's about to be cut off, so it can't prioritize.
+
+Both fail because the model is **uninformed**. It doesn't know its budget. It doesn't know what similar tasks looked like before. It has no fuel gauge.
+
+## The Solution
+
+Loop Pilot gives your harness a behavior memory. Before each agent loop starts, it:
+
+1. **Finds similar past episodes** using KNN similarity search
+2. **Predicts a tool budget** based on what worked before
+3. **Generates a guidance block** that gets injected into the system prompt
+
+The model reads the guidance and self-regulates. No hard cap changes. No dynamic halting. Just: here's your fuel gauge, here's your map, you're the driver.
+
+**Philosophy: inform, then trust.**
+
+## How It Works
 
 ```mermaid
 flowchart LR
-  A["Agent harness logs"] --> B["Episode parser"]
-  B --> C["Episode memory"]
-  C --> D["Embedding builder"]
-  D --> E["Similarity search"]
-  E --> F["Budget predictor"]
-  F --> G["Prompt guidance"]
-  G --> H["Agent harness"]
+  A["New task arrives"] --> B["Embed task description"]
+  B --> C["KNN: find similar past episodes"]
+  C --> D["Predict budget from neighbors"]
+  D --> E["Generate prompt guidance"]
+  E --> F["Inject into agent system prompt"]
+  F --> G["Agent loop runs normally"]
+  G --> H["Episode recorded for future"]
 ```
 
-Built in Phase 1:
+The guidance block looks like this:
 
-- Episode parser
-- Episode memory
-- Embedding builder
-- Similarity search
-- Budget predictor
-- Prompt guidance block
-- CLI
-- HTTP/MCP wrapper
-- JSONL event adapter
+```
+## Loop Pilot Guidance
 
-Planned next:
+Similar past behavior suggests:
+- Suggested tool-call budget: 4
+- Confidence: high
+- Risk: low
+- Likely useful tools: bash, web_search, write_file
 
-- More harness adapters
-- Scheduled import/index jobs
-- Better benchmark reporting
-- Tool-failure learning
-- Optional hosted/service packaging
-- Later: runtime steering and bandit learning
+Reason: Based on 5 similar successful episode(s), average tool calls were 3.2.
+Likely allocation:
+- bash: 2 calls
+- web_search: 1 call
+- write_file: 1 call
+Repeated-tool caution: similar tasks repeated bash. Avoid repeating
+a tool once enough context is found.
 
-Loop Pilot is currently a **local-first package and MCP/HTTP server**, not a hosted API service. You run it beside your harness and connect it to your own embedding provider.
+Use this as operational guidance. Continue to reason normally.
+```
 
-## Requirements
+The model treats this as context, not as a command. It self-moderates — the same way a researcher adjusts when told "the deadline is tomorrow."
 
-To use Loop Pilot, you need:
-
-- Node.js 22 or newer
-- A place to store local SQLite memory
-- Past harness behavior, either logs or structured episodes
-- An embedding provider
-
-Embedding provider options:
-
-- HTTP endpoint, for example `http://127.0.0.1:8000/embed`
-- Local command that reads text on stdin and returns an embedding
-- The deterministic test embedder, only for tests
-
-Recommended local model style:
-
-- A small embedding model that can run locally, or a shared embedding service your harness already uses
-
-## Commands
+## Quick Start
 
 ```bash
-looppilot collection scan /path/to/harness --json
-looppilot collection init /path/to/harness
-looppilot collection parse --config /path/to/harness/looppilot.collections.json
-looppilot collection import --config /path/to/harness/looppilot.collections.json
-looppilot import events --events /path/to/events.jsonl --errors /path/to/error.log --harness my-harness
-looppilot index --embedding http --embedding-url http://127.0.0.1:8000/embed --dimensions 768
-looppilot plan --task "Prepare me for my next meeting" --embedding http --embedding-url http://127.0.0.1:8000/embed --dimensions 768
-looppilot benchmark --events /path/to/events.jsonl --errors /path/to/error.log --embedding command --embedding-command /path/to/embed-one --dimensions 768
+npm install looppilot
+```
+
+### 1. Import your harness logs
+
+```bash
+# Auto-detect log files in your harness repo
+looppilot collection scan /path/to/your-harness --json
+
+# Initialize collection config
+looppilot collection init /path/to/your-harness
+
+# Parse and import episodes
+looppilot collection parse --config /path/to/looppilot.collections.json
+looppilot collection import --config /path/to/looppilot.collections.json
+```
+
+### 2. Build embeddings
+
+```bash
+looppilot index \
+  --embedding http \
+  --embedding-url http://127.0.0.1:8000/embed \
+  --dimensions 768
+```
+
+### 3. Get guidance for a task
+
+```bash
+looppilot plan \
+  --task "Summarize my unread emails" \
+  --embedding http \
+  --embedding-url http://127.0.0.1:8000/embed \
+  --dimensions 768
+```
+
+### 4. Run as a server
+
+```bash
+# HTTP server
 looppilot serve --transport http --port 8191
+
+# MCP server (for Claude Code, Cal, or any MCP-compatible harness)
 looppilot serve --transport mcp --port 8191
 ```
 
-The recommended onboarding path is automatic:
+## Library Usage
 
-1. `collection scan` searches a harness repo for likely behavior logs and prints agent-readable JSON when `--json` is used.
-2. `collection init` writes `looppilot.collections.json` from the detected logs.
-3. `collection parse` dry-runs the parser and shows a small episode sample.
-4. `collection import` imports those episodes into Loop Pilot memory.
+```typescript
+import { LoopPilot, SqliteEpisodeStore, HttpEmbeddingProvider } from "looppilot";
 
-The lower-level `import events --events ...` command is still available when you already know the exact log paths.
-
-## MCP Tools
-
-When Loop Pilot runs with `looppilot serve --transport mcp`, it exposes four generic tools:
-
-| Tool | Purpose |
-|---|---|
-| `plan_task` | Return budget guidance, likely tools, risk, and a prompt guidance block before a task starts. |
-| `record_episode` | Record one completed behavior episode from a harness that can emit structured run data. |
-| `import_episodes` | Bulk import parsed historical episodes, useful for first setup and scheduled refresh jobs. |
-| `get_stats` | Return basic memory statistics such as stored episode count. |
-
-Harnesses usually call `plan_task` before a run begins. The ingestion tools are available for first setup, scheduled refreshes, and harnesses that can report completed episodes directly.
-
-Loop Pilot does not install or own an embedding model. It uses a configured embedding provider:
-
-- `http`: POSTs task text to a shared local embedding service and expects `number[]` or `{ "embedding": number[] }`.
-- `command`: sends task text to a local command on stdin and expects `number[]` or `{ "embedding": number[] }`.
-- `deterministic`: a fast test provider only.
-
-Small local embedding models are a good default, but they should run as a shared provider outside Loop Pilot. That lets an existing harness reuse the same model for behavior embeddings without downloading or compiling a second copy.
-
-If no embedding provider is configured, indexing and planning will fail with a setup error instead of silently using the test embedder.
-
-## Library
-
-```ts
-import { HttpEmbeddingProvider, LoopPilot, SqliteEpisodeStore } from "looppilot";
-
-const loopPilot = new LoopPilot({
+const pilot = new LoopPilot({
   store: new SqliteEpisodeStore({ dbPath: "looppilot.sqlite" }),
   embeddings: new HttpEmbeddingProvider({
     endpoint: "http://127.0.0.1:8000/embed",
-    dimensions: 768
-  })
+    dimensions: 768,
+  }),
 });
 
-const plan = await loopPilot.plan({ task: "Prepare me for my next meeting" });
+// Get guidance before your agent loop starts
+const plan = await pilot.plan({ task: "Prepare me for my next meeting" });
+
+console.log(plan.prediction.suggestedBudget); // 4
+console.log(plan.promptGuidance); // Full guidance block to inject
 ```
+
+## MCP Tools
+
+When running as an MCP server, Loop Pilot exposes four tools:
+
+| Tool | Purpose |
+|------|---------|
+| `plan_task` | Get budget prediction + prompt guidance before a task starts |
+| `record_episode` | Record a completed episode from a harness that reports structured run data |
+| `import_episodes` | Bulk import historical episodes (first setup / scheduled refresh) |
+| `get_stats` | Memory statistics (episode count, coverage) |
+
+## Embedding Provider
+
+Loop Pilot does **not** ship an embedding model. Your harness provides embeddings via one of:
+
+| Provider | How It Works |
+|----------|--------------|
+| `http` | POSTs text to a local endpoint, expects `number[]` or `{ embedding: number[] }` |
+| `command` | Pipes text to a CLI command, reads `number[]` from stdout |
+| `deterministic` | Fast hash-based embedder for tests only |
+
+**Recommended:** Share your harness's existing embedding model. If your harness already runs a local model for RAG or knowledge search, point Loop Pilot at the same endpoint. One model, two uses, no extra memory.
+
+## Architecture
+
+```
+looppilot/
+├── src/
+│   ├── core/
+│   │   ├── types.ts            # Episode, Plan, Prediction interfaces
+│   │   ├── sqlite-store.ts     # SQLite-backed episode memory
+│   │   ├── embeddings.ts       # Pluggable embedding providers
+│   │   ├── similarity.ts       # KNN similarity search
+│   │   ├── budget-predictor.ts # Statistical budget prediction
+│   │   ├── prompt-guidance.ts  # Guidance block generator
+│   │   ├── collections.ts      # Auto-discovery of harness logs
+│   │   ├── benchmark.ts        # Leave-one-out benchmarking
+│   │   └── loop-pilot.ts       # Orchestrator (plan, record, import)
+│   ├── adapters/
+│   │   └── jsonl-events/       # Parser for JSONL event logs
+│   ├── server/
+│   │   ├── http.ts             # HTTP server
+│   │   └── mcp.ts              # MCP server
+│   └── cli/
+│       └── index.ts            # CLI entry point
+└── test/
+```
+
+## Benchmarking
+
+Run leave-one-out cross-validation against your own episode history:
+
+```bash
+looppilot benchmark \
+  --events /path/to/events.jsonl \
+  --errors /path/to/error.log \
+  --embedding command \
+  --embedding-command ./embed-one \
+  --dimensions 768
+```
+
+Reports: success rate vs. fixed budget, under/over-budget rate, max-iteration avoidance rate.
+
+## Roadmap
+
+- [x] Episode memory + KNN similarity
+- [x] Budget prediction + prompt guidance
+- [x] CLI + HTTP/MCP server
+- [x] JSONL event adapter
+- [x] Leave-one-out benchmark
+- [ ] More harness adapters (LangChain, CrewAI, custom)
+- [ ] Tool-failure learning (weight errors higher)
+- [ ] Runtime steering (mid-loop adjustment)
+- [ ] Bandit learning (explore vs. exploit on budget)
+- [ ] npm publish
+
+## Requirements
+
+- Node.js 22+
+- An embedding provider (local HTTP endpoint, CLI command, or shared model)
+- Past harness behavior logs (JSONL events, structured episodes, or custom adapter)
+
+## Philosophy
+
+Loop Pilot implements **"inform, then trust"** — a middle path between blind trust (no limits, hope the model stops) and rigid constraint (hard caps, defense in depth).
+
+The model receives its budget as context, not as a hard limit. It self-regulates. The harness's existing safety cap remains unchanged as a backstop.
+
+As models get smarter through agentic post-training, they'll need less informing. Loop Pilot's guidance gracefully becomes unnecessary — the harness simplifies to just a safety net. That's the bridge strategy: meet the model where it is today, adapt as it improves.
+
+## License
+
+MIT — Monika Bishnoi, 2026
