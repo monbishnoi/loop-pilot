@@ -61,9 +61,23 @@ export interface PlanRequest {
 
 export interface BudgetPrediction {
   suggestedBudget: number;
+  budgetRange: {
+    min: number;
+    max: number;
+  };
   toolBudget: Record<string, number>;
   confidence: Confidence;
   risk: Risk;
+  guidanceMode: 'optimize' | 'planning-prior' | 'rough-prior';
+  evidence: {
+    topSimilarity: number;
+    averageSimilarity: number;
+    similaritySpread: number;
+    successfulNeighbors: number;
+    totalNeighbors: number;
+    intentMatchRate: number;
+    taskComplexity: 'routine' | 'complex' | 'unknown';
+  };
   likelyTools: string[];
   repeatedToolPatterns: string[];
   failureHints: string[];

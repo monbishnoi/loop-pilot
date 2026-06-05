@@ -25,7 +25,7 @@ Both fail because the model is **uninformed**. It doesn't know its budget. It do
 Loop Pilot gives your harness a behavior memory. Before each agent loop starts, it:
 
 1. **Finds similar past episodes** using KNN similarity search
-2. **Predicts a tool budget** based on what worked before
+2. **Predicts a tool budget and uncertainty range** based on what worked before
 3. **Generates a guidance block** that gets injected into the system prompt
 
 The model reads the guidance and self-regulates. No hard cap changes. No dynamic halting. Just: here's your fuel gauge, here's your map, you're the driver.
@@ -52,9 +52,14 @@ The guidance block looks like this:
 
 Similar past behavior suggests:
 - Suggested tool-call budget: 4
-- Confidence: high
+- Estimated budget range: 3-6
+- Confidence: medium
 - Risk: low
 - Likely useful tools: bash, web_search, write_file
+
+How to use this: Partial match. Use this as a planning prior, then adjust from the actual task steps.
+
+Evidence: top similarity 0.68, average similarity 0.51, intent match 60%.
 
 Reason: Based on 5 similar successful episode(s), average tool calls were 3.2.
 Likely allocation:
@@ -67,7 +72,7 @@ a tool once enough context is found.
 Use this as operational guidance. Continue to reason normally.
 ```
 
-The model treats this as context, not as a command. It self-moderates — the same way a researcher adjusts when told "the deadline is tomorrow."
+The model treats this as context, not as a command. High-confidence guidance can be optimized around. Medium-confidence guidance is a planning prior. Low-confidence guidance says the match is weak and tells the model to decompose the task first.
 
 ## Quick Start
 

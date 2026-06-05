@@ -10,11 +10,14 @@ import {
   LoopPilot,
   SqliteEpisodeStore,
   buildEpisodesFromJsonlEvents,
+  createPromptGuidance,
   importBehaviorCollections,
   parseMaxIterationLogs,
+  predictBudget,
   runRetrospectiveBenchmark,
   scanBehaviorCollections,
   startHttpServer,
+  type SimilarEpisode,
   type ToolCallEpisode,
   writeBehaviorCollectionConfig,
 } from '../src/index.js';
@@ -62,15 +65,59 @@ test('LoopPilot stores, indexes, plans, and generates guidance', async () => {
 
     const plan = await loopPilot.plan({ task: 'Can you prepare me for my next meeting?' });
     assert.ok(plan.prediction.suggestedBudget >= 2);
+    assert.ok(plan.prediction.budgetRange.max >= plan.prediction.suggestedBudget);
+    assert.ok(plan.prediction.evidence.totalNeighbors > 0);
     assert.ok(Object.keys(plan.prediction.toolBudget).length > 0);
     assert.ok(plan.prediction.likelyTools.length > 0);
     assert.match(plan.promptGuidance, /Loop Pilot Guidance/);
     assert.match(plan.promptGuidance, /Suggested tool-call budget/);
+    assert.match(plan.promptGuidance, /Estimated budget range/);
     assert.match(plan.promptGuidance, /Likely allocation/);
     assert.equal(plan.similarEpisodes.some((item) => item.episode.embedding), false);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+test('budget predictor does not call weakly similar neighbors high confidence', () => {
+  const similar = [
+    similarEpisode('1', 'Check calendar', ['read_calendar'], 1, 0.31),
+    similarEpisode('2', 'Prepare meeting notes', ['read_calendar', 'read_file'], 2, 0.29),
+    similarEpisode('3', 'Search notes for meeting', ['semantic_search'], 1, 0.27),
+    similarEpisode('4', 'Summarize schedule', ['read_calendar'], 1, 0.26),
+    similarEpisode('5', 'Find calendar conflicts', ['read_calendar'], 1, 0.25),
+  ];
+
+  const prediction = predictBudget(similar, { task: 'Publish the Loop Pilot blog post and push it to the website' });
+
+  assert.equal(prediction.confidence, 'low');
+  assert.equal(prediction.guidanceMode, 'rough-prior');
+  assert.equal(prediction.evidence.taskComplexity, 'complex');
+  assert.ok(prediction.budgetRange.max >= 8);
+
+  const guidance = createPromptGuidance(prediction);
+  assert.match(guidance, /Weak match/);
+  assert.match(guidance, /Decompose the task first/);
+  assert.match(guidance, /do not optimize around the number/);
+});
+
+test('budget predictor requires strong evidence before high confidence', () => {
+  const similar = [
+    similarEpisode('1', 'Publish blog post to website and push changes', ['read_file', 'write_file', 'git'], 5, 0.86),
+    similarEpisode('2', 'Create website post then commit and push', ['read_file', 'write_file', 'git'], 6, 0.82),
+    similarEpisode('3', 'Update website HTML and push to GitHub', ['read_file', 'write_file', 'git'], 5, 0.8),
+    similarEpisode('4', 'Publish article page and commit website', ['read_file', 'write_file', 'git'], 6, 0.78),
+    similarEpisode('5', 'Post blog HTML update to website repo', ['read_file', 'write_file', 'git'], 5, 0.76),
+  ];
+
+  const prediction = predictBudget(similar, { task: 'Publish the Loop Pilot blog post and push it to the website' });
+
+  assert.equal(prediction.confidence, 'high');
+  assert.equal(prediction.guidanceMode, 'optimize');
+  assert.deepEqual(prediction.budgetRange, {
+    min: prediction.suggestedBudget,
+    max: prediction.suggestedBudget,
+  });
 });
 
 test('benchmark compares fixed budget to Loop Pilot predictions', async () => {
@@ -224,6 +271,19 @@ function episode(episodeId: string, task: string, toolsUsed: string[], toolCallC
     hitMaxIterations: false,
     neededContinuation: false,
     failureLabels: [],
+  };
+}
+
+function similarEpisode(
+  episodeId: string,
+  task: string,
+  toolsUsed: string[],
+  toolCallCount: number,
+  similarity: number,
+): SimilarEpisode {
+  return {
+    episode: episode(episodeId, task, toolsUsed, toolCallCount),
+    similarity,
   };
 }
 

@@ -4,6 +4,10 @@ export function createPromptGuidance(prediction: BudgetPrediction): string {
   const likelyTools = prediction.likelyTools.length > 0
     ? prediction.likelyTools.join(', ')
     : 'No strong tool pattern yet';
+  const budgetRange = prediction.budgetRange.min === prediction.budgetRange.max
+    ? `${prediction.budgetRange.min}`
+    : `${prediction.budgetRange.min}-${prediction.budgetRange.max}`;
+  const confidenceNote = confidenceNoteFor(prediction);
   const repeatedTools = prediction.repeatedToolPatterns.length > 0
     ? `\nRepeated-tool caution: similar tasks repeated ${prediction.repeatedToolPatterns.join(', ')}. Avoid repeating a tool once enough context is found.`
     : '';
@@ -20,11 +24,28 @@ export function createPromptGuidance(prediction: BudgetPrediction): string {
 
 Similar past behavior suggests:
 - Suggested tool-call budget: ${prediction.suggestedBudget}
+- Estimated budget range: ${budgetRange}
 - Confidence: ${prediction.confidence}
 - Risk: ${prediction.risk}
 - Likely useful tools: ${likelyTools}
 
+How to use this: ${confidenceNote}
+
+Evidence: top similarity ${prediction.evidence.topSimilarity.toFixed(2)}, average similarity ${prediction.evidence.averageSimilarity.toFixed(2)}, intent match ${(prediction.evidence.intentMatchRate * 100).toFixed(0)}%.
+
 Reason: ${prediction.reason}${toolBudget}${repeatedTools}${failureHints}
 
 Use this as operational guidance. Continue to reason normally.`;
+}
+
+function confidenceNoteFor(prediction: BudgetPrediction): string {
+  if (prediction.guidanceMode === 'optimize') {
+    return 'Strong match. It is reasonable to optimize around this budget while still following the task requirements.';
+  }
+
+  if (prediction.guidanceMode === 'planning-prior') {
+    return 'Partial match. Use this as a planning prior, then adjust from the actual task steps.';
+  }
+
+  return 'Weak match. Use this only as a rough prior. Decompose the task first; do not optimize around the number or stop early just because the historical average is low.';
 }

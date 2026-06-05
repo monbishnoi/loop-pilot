@@ -41,7 +41,7 @@ export async function runRetrospectiveBenchmark(
         minSimilarity: options.minSimilarity,
         relativeMinSimilarity: options.relativeMinSimilarity,
       });
-      const prediction = predictBudget(similar, { maxBudget, defaultBudget: fixedBudget });
+      const prediction = predictBudget(similar, { task: episode.task, maxBudget, defaultBudget: fixedBudget });
       const actualCalls = episode.toolCallCount;
       const actualSuccess = episode.outcome === 'success' && !episode.hitMaxIterations;
       const fixedWouldCover = actualCalls <= fixedBudget && actualSuccess;

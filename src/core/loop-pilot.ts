@@ -48,6 +48,7 @@ export class LoopPilot {
       relativeMinSimilarity: request.relativeMinSimilarity,
     });
     const prediction = predictBudget(similarEpisodes, {
+      task: request.task,
       defaultBudget: request.defaultBudget,
       minBudget: request.minBudget,
       maxBudget: request.maxBudget,
