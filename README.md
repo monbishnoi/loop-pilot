@@ -1,8 +1,8 @@
 # Loop Pilot
 
-Loop Pilot orchestrates autonomous agent loops by learning from past runs, guiding future execution, and helping agents avoid drift, wasted loops, and premature exhaustion.
+Loop Pilot is a trajectory optimization engine for custom agent harnesses. It learns from past runs, predicts tool budgets, and injects guidance so loops do not drift, waste calls, or exhaust early.
 
-> Knowledge memory indexes what an agent knows. Loop Pilot indexes how an agent acts.
+> Mission control for agent trajectories.
 
 Phase 1 turns agent runtime logs into behavior episodes, embeds those episodes, finds similar past tasks with KNN, and returns a budget plus prompt guidance before the next agent loop starts.
 
