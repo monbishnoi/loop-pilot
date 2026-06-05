@@ -1,0 +1,7 @@
+node_modules/
+dist/
+data/
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+Loop Pilot - Phase 1 KNN Baseline.md
