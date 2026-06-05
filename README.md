@@ -232,7 +232,17 @@ Agentic RL post-training (Tool-R1, ARTIST, DAPO) can teach models to internalize
 
 Loop Pilot gives any custom harness the *behavioral* benefits of post-training — learned iteration patterns, diminishing-returns awareness, tool-specific budgeting — without touching model weights. It runs at the harness layer, learns from *your* logs, and works with any model.
 
-As general-purpose models do get post-trained on agentic efficiency, Loop Pilot's guidance gracefully becomes unnecessary — the harness simplifies to just a safety net. That's the bridge strategy: meet the model where it is today, adapt as it improves.
+As general-purpose models get post-trained on agentic efficiency, they'll internalize *generic* tool-use discipline — when to stop searching, when to write instead of research. Loop Pilot's general budget guidance simplifies for those cases.
+
+But here's the thing: post-training can't cover the long tail. Your custom harness has unique tools, unique workflow shapes, unique patterns of what "success" looks like. No foundation model will ever be trained on *your* specific system. For harness-specific behavioral memory, Loop Pilot remains valuable — indefinitely.
+
+| Model Generation | Generic tasks | Your custom harness |
+|-----------------|---------------|---------------------|
+| Current (no agentic RL) | Loop Pilot informs heavily | Loop Pilot informs heavily |
+| Post-trained (general efficiency) | Model handles this natively | **Loop Pilot still valuable** — model wasn't trained on your tools |
+| Far future | Model handles this natively | **Loop Pilot still valuable** — custom workflows are a long tail post-training will never reach |
+
+That's the real positioning: Loop Pilot isn't a temporary crutch. It's infrastructure for the space between general model intelligence and your specific system's patterns.
 
 ## License
 
