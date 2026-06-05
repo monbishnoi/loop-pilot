@@ -7,6 +7,7 @@ export * from './core/prompt-guidance.js';
 export * from './core/loop-pilot.js';
 export * from './core/benchmark.js';
 export * from './core/collections.js';
+export * from './core/observer.js';
 export * from './adapters/jsonl-events/parser.js';
 export * from './server/http.js';
 export * from './server/mcp.js';

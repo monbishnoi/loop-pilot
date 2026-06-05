@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -8,6 +8,7 @@ import {
   DeterministicEmbeddingProvider,
   HttpEmbeddingProvider,
   LoopPilot,
+  LoopPilotObserver,
   SqliteEpisodeStore,
   buildEpisodesFromJsonlEvents,
   createPromptGuidance,
@@ -35,8 +36,16 @@ test('JSONL event parser groups events into behavior episodes and enriches max-i
   const episodes = buildEpisodesFromJsonlEvents([
     event('message_received', 'run-1', { text: 'Research the agent harness deeply' }),
     event('run_started', 'run-1'),
+    event('loop_pilot_shadow_plan', 'run-1', {
+      experiment: 'loop_pilot_shadow_v1',
+      injected: false,
+      suggestedBudget: 3,
+      budgetRange: { min: 2, max: 5 },
+      confidence: 'medium',
+    }),
     event('tool_call_started', 'run-1', { tool: 'genai_search' }),
     event('tool_call_finished', 'run-1', { tool: 'genai_search', isError: false }),
+    event('response_complete', 'run-1', { text: 'Done' }),
     event('run_finished', 'run-1'),
   ], maxLogs);
 
@@ -46,6 +55,14 @@ test('JSONL event parser groups events into behavior episodes and enriches max-i
   assert.deepEqual(episodes[0].toolsUsed, ['genai_search']);
   assert.equal(episodes[0].hitMaxIterations, true);
   assert.equal(episodes[0].outcome, 'error');
+  assert.equal(episodes[0].rawSource?.responseCharCount, 4);
+  assert.deepEqual(episodes[0].rawSource?.loopPilotShadowPlan, {
+    experiment: 'loop_pilot_shadow_v1',
+    injected: false,
+    suggestedBudget: 3,
+    budgetRange: { min: 2, max: 5 },
+    confidence: 'medium',
+  });
 });
 
 test('LoopPilot stores, indexes, plans, and generates guidance', async () => {
@@ -247,6 +264,44 @@ test('collection scanner discovers JSONL run logs and imports from generated con
     const result = await importBehaviorCollections(loopPilot, configPath);
     assert.equal(result.parsed, 1);
     assert.equal(result.total, 1);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('standalone observer writes shadow predictions and scored outcomes', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'looppilot-observer-'));
+  const dbPath = join(dir, 'looppilot.sqlite');
+  const outputPath = join(dir, 'shadow.jsonl');
+
+  try {
+    const loopPilot = await createLoopPilot(dbPath);
+    await loopPilot.importEpisodes([
+      episode('hist-1', 'Prepare meeting notes', ['read_calendar', 'read_file'], 2),
+      episode('hist-2', 'Prepare next meeting from calendar', ['read_calendar', 'semantic_search', 'read_file'], 3),
+      episode('hist-3', 'Calendar meeting preparation', ['read_calendar', 'read_file'], 2),
+    ]);
+    await loopPilot.indexEpisodes();
+
+    const observer = new LoopPilotObserver(loopPilot, { outputPath, eventsPath: 'unused', harness: 'test' });
+    await observer.processEvent(event('message_received', 'run-1', { text: 'Prepare me for my next meeting' }));
+    await observer.processEvent(event('run_started', 'run-1'));
+    await observer.processEvent(event('tool_call_started', 'run-1', { tool: 'read_calendar' }));
+    await observer.processEvent(event('tool_call_finished', 'run-1', { tool: 'read_calendar', isError: false }));
+    await observer.processEvent(event('response_complete', 'run-1', { text: 'Prepared.' }));
+    await observer.processEvent(event('run_finished', 'run-1'));
+
+    const records = (await readFile(outputPath, 'utf8'))
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line));
+
+    assert.equal(records.length, 2);
+    assert.equal(records[0].type, 'prediction');
+    assert.equal(records[0].injected, false);
+    assert.equal(records[1].type, 'outcome');
+    assert.equal(records[1].actual.toolCallCount, 1);
+    assert.ok(['good', 'penalize_under_budget', 'penalize_over_budget', 'needs_review'].includes(records[1].reward.label));
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

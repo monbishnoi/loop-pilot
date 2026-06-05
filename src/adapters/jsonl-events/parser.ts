@@ -85,6 +85,8 @@ export function buildEpisodesFromJsonlEvents(
     const toolStarts = runEvents.filter((event) => event.type === 'tool_call_started');
     const toolFinishes = runEvents.filter((event) => event.type === 'tool_call_finished');
     const runError = runEvents.find((event) => event.type === 'run_error');
+    const shadowPlan = runEvents.find((event) => event.type === 'loop_pilot_shadow_plan');
+    const responseComplete = [...runEvents].reverse().find((event) => event.type === 'response_complete');
     const task = message.payload.text;
     const sessionId = message.sessionId ?? runStarted?.sessionId ?? null;
     const matchedMaxIteration = findMaxIterationMatch(task, sessionId, maxIterationLogs);
@@ -118,6 +120,10 @@ export function buildEpisodesFromJsonlEvents(
         runId,
         eventCount: runEvents.length,
         maxIterationLog: matchedMaxIteration ?? null,
+        loopPilotShadowPlan: shadowPlan?.payload ?? null,
+        responseCharCount: typeof responseComplete?.payload?.text === 'string'
+          ? responseComplete.payload.text.length
+          : null,
       },
     });
   }

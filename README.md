@@ -2,7 +2,7 @@
 
 **A trajectory optimization engine for custom agent harnesses.**
 
-Learns from past runs, predicts tool budgets, and injects guidance — so loops don't drift, waste calls, or exhaust early.
+Learns from past runs, predicts tool budgets, and evaluates agent loops — so loops don't drift, waste calls, or exhaust early.
 
 > Mission control for agent trajectories.
 
@@ -168,13 +168,28 @@ Loop Pilot does **not** ship an embedding model. Your harness provides embedding
 
 ## Architecture
 
-Loop Pilot operates in two modes:
+Loop Pilot can be integrated in three stages:
+
+### Shadow Benchmark: Observe First
+
+In early deployments, run Loop Pilot as a standalone observer. The harness writes its normal event log; Loop Pilot tails that log, predicts what it would have suggested, and records the prediction beside the real run:
+
+```text
+runId
+task
+Loop Pilot predicted budget/range/confidence/tools
+actual tool calls
+actual tools used
+actual outcome
+```
+
+This lets Loop Pilot learn whether its KNN predictions are useful before the model sees them. It is the safest default for a new harness or a young episode memory.
 
 ### Pre-Loop: Prediction & Guidance
 
 ![Pre-Loop Architecture](assets/architecture-pre-loop.svg)
 
-Before the agent loop starts, Loop Pilot embeds the task, finds similar past episodes via KNN, predicts a tool budget, and injects guidance into the system prompt. The model self-regulates. When the loop completes, the episode feeds back into memory for future predictions.
+Before the agent loop starts, Loop Pilot embeds the task, finds similar past episodes via KNN, predicts a tool budget, and can generate guidance for the system prompt. Only enable prompt injection after shadow benchmarks show that the predictions are helpful. When the loop completes, the episode feeds back into memory for future predictions.
 
 ### Mid-Loop: Real-Time Steering
 

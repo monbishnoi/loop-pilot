@@ -13,6 +13,7 @@ import {
   importBehaviorCollections,
   parseJsonlEventFiles,
   parseBehaviorCollections,
+  observeEventLog,
   runRetrospectiveBenchmark,
   scanBehaviorCollections,
   startHttpServer,
@@ -132,6 +133,20 @@ async function main(argv: string[]): Promise<void> {
       relativeMinSimilarity: optionalNumber(options.relativeMinSimilarity),
     });
     console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+
+  if (command === 'observe') {
+    const eventsPath = required(options.events, '--events');
+    const outputPath = resolve(options.output ?? 'data/shadow-observations.jsonl');
+    await observeEventLog(loopPilot, {
+      eventsPath,
+      outputPath,
+      pollMs: optionalNumber(options.pollMs),
+      fromStart: options.fromStart === 'true',
+      harness: options.harness ?? 'jsonl-events',
+      maxBudget: optionalNumber(options.maxBudget),
+    });
     return;
   }
 
@@ -270,6 +285,7 @@ Commands:
   looppilot index [--db <path>] [--embedding http|command|deterministic]
   looppilot plan --task <task> [--db <path>] [--embedding http|command|deterministic]
   looppilot benchmark --events <events.jsonl> [--errors <error.log>] [--harness <name>] [--embedding http|command|deterministic]
+  looppilot observe --events <events.jsonl> [--output <shadow.jsonl>] [--from-start true]
   looppilot serve --transport <http|mcp> [--port 8191] [--db <path>] [--embedding http|command|deterministic]
 
 Embedding options:
