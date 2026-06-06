@@ -11,6 +11,7 @@ import {
   LoopPilotObserver,
   SqliteEpisodeStore,
   buildEpisodesFromJsonlEvents,
+  collectShadowObservationStats,
   createPromptGuidance,
   importBehaviorCollections,
   parseMaxIterationLogs,
@@ -298,10 +299,91 @@ test('standalone observer writes shadow predictions and scored outcomes', async 
 
     assert.equal(records.length, 2);
     assert.equal(records[0].type, 'prediction');
+    assert.equal(records[0].experiment, 'loop_pilot_standalone_shadow_v2');
     assert.equal(records[0].injected, false);
     assert.equal(records[1].type, 'outcome');
+    assert.equal(records[1].experiment, 'loop_pilot_standalone_shadow_v2');
     assert.equal(records[1].actual.toolCallCount, 1);
     assert.ok(['good', 'penalize_under_budget', 'penalize_over_budget', 'needs_review'].includes(records[1].reward.label));
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('standalone observer enriches v2 outcomes with rich episode fields and session history', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'looppilot-rich-observer-'));
+  const dbPath = join(dir, 'looppilot.sqlite');
+  const outputPath = join(dir, 'shadow.jsonl');
+
+  try {
+    const loopPilot = await createLoopPilot(dbPath);
+    await loopPilot.importEpisodes([
+      episode('hist-1', 'Check service docs', ['fetch'], 1),
+      episode('hist-2', 'Run scheduled service check', ['fetch', 'notify'], 2),
+      episode('hist-3', 'Debug failing tool call', ['shell'], 1),
+    ]);
+    await loopPilot.indexEpisodes();
+
+    const observer = new LoopPilotObserver(loopPilot, { outputPath, eventsPath: 'unused', harness: 'test' });
+    await observer.processEvent(eventAt('message_received', 'run-1', '2026-06-01T10:00:00.000Z', { text: 'Check service docs' }));
+    await observer.processEvent(eventAt('run_started', 'run-1', '2026-06-01T10:00:01.000Z'));
+    await observer.processEvent(eventAt('tool_call_started', 'run-1', '2026-06-01T10:00:02.000Z', { tool: 'fetch' }));
+    await observer.processEvent(eventAt('tool_call_finished', 'run-1', '2026-06-01T10:00:03.000Z', { tool: 'fetch' }));
+    await observer.processEvent(eventAt('response_complete', 'run-1', '2026-06-01T10:00:04.000Z', { text: 'Done.' }));
+    await observer.processEvent(eventAt('run_finished', 'run-1', '2026-06-01T10:00:05.000Z'));
+
+    const task = '[Scheduled Job: docs] Check https://example.com? ```ts\nconst ok = true;\n```';
+    await observer.processEvent(eventAt('message_received', 'run-2', '2026-06-02T17:30:00.000Z', { text: task }));
+    await observer.processEvent(eventAt('run_started', 'run-2', '2026-06-02T17:30:01.000Z'));
+    await observer.processEvent(eventAt('tool_call_started', 'run-2', '2026-06-02T17:30:02.000Z', { tool: 'fetch' }));
+    await observer.processEvent(eventAt('tool_call_finished', 'run-2', '2026-06-02T17:30:03.000Z', { tool: 'fetch', error: 'network' }));
+    await observer.processEvent(eventAt('response_complete', 'run-2', '2026-06-02T17:30:04.000Z', { text: 'Could not fetch.' }));
+    await observer.processEvent(eventAt('run_error', 'run-2', '2026-06-02T17:30:05.000Z', { error: 'network' }));
+
+    const records = (await readFile(outputPath, 'utf8'))
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line));
+    const outcomes = records.filter((record) => record.type === 'outcome');
+    const second = outcomes[1];
+
+    assert.equal(outcomes.length, 2);
+    assert.equal(second.runId, 'run-2');
+    assert.equal(second.sessionRunIndex, 2);
+    assert.equal(second.previousRunToolCount, 1);
+    assert.equal(second.previousRunOutcome, 'success');
+    assert.equal(second.previousRunDurationMs, 4000);
+    assert.equal(second.actualToolCalls, 1);
+    assert.deepEqual(second.actualToolChain, ['fetch']);
+    assert.deepEqual(second.uniqueToolsUsed, ['fetch']);
+    assert.equal(second.uniqueToolCount, 1);
+    assert.equal(second.toolErrors, 1);
+    assert.deepEqual(second.toolErrorNames, ['fetch']);
+    assert.equal(second.outcome, 'failure');
+    assert.equal(second.outcomeLabel, 'error');
+    assert.equal(second.durationMs, 4000);
+    assert.equal(second.timeOfDay, 17 + 30 / 60 + 1 / 3600);
+    assert.equal(second.dayOfWeek, 2);
+    assert.equal(second.taskCharCount, task.length);
+    assert.equal(second.taskQuestionMarks, 1);
+    assert.equal(second.taskHasCodeBlock, true);
+    assert.equal(second.taskHasUrl, true);
+    assert.equal(second.isScheduledJob, true);
+    assert.equal(second.responseCharCount, 'Could not fetch.'.length);
+    assert.equal(typeof second.predictedBudget, 'number');
+    assert.ok(['high', 'medium', 'low'].includes(second.predictedConfidence));
+    assert.ok(Array.isArray(second.predictedTools));
+    assert.equal(typeof second.knnTopSimilarity, 'number');
+    assert.equal(typeof second.knnNeighborCount, 'number');
+
+    const stats = await collectShadowObservationStats(outputPath);
+    assert.equal(stats.totalEpisodes, 2);
+    assert.equal(stats.taskTypeDistribution.scheduled, 1);
+    assert.equal(stats.taskTypeDistribution.interactive, 1);
+    assert.equal(stats.averageToolCalls, 1);
+    assert.equal(stats.hitCapRate, 0);
+    assert.equal(stats.uniqueToolsSeen.includes('fetch'), true);
+    assert.equal(typeof stats.predictionMae, 'number');
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -325,6 +407,13 @@ function event(type: string, runId: string, payload: Record<string, unknown> = {
     runId,
     source: 'test',
     payload,
+  };
+}
+
+function eventAt(type: string, runId: string, timestamp: string, payload: Record<string, unknown> = {}) {
+  return {
+    ...event(type, runId, payload),
+    timestamp,
   };
 }
 

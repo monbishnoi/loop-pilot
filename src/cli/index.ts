@@ -10,6 +10,8 @@ import {
   type EmbeddingProvider,
   LoopPilot,
   SqliteEpisodeStore,
+  collectShadowObservationStats,
+  formatShadowObservationStats,
   importBehaviorCollections,
   parseJsonlEventFiles,
   parseBehaviorCollections,
@@ -137,8 +139,13 @@ async function main(argv: string[]): Promise<void> {
   }
 
   if (command === 'observe') {
-    const eventsPath = required(options.events, '--events');
     const outputPath = resolve(options.output ?? 'data/shadow-observations.jsonl');
+    if (options.stats === 'true') {
+      console.log(formatShadowObservationStats(await collectShadowObservationStats(outputPath)));
+      return;
+    }
+
+    const eventsPath = required(options.events, '--events');
     await observeEventLog(loopPilot, {
       eventsPath,
       outputPath,
@@ -286,6 +293,7 @@ Commands:
   looppilot plan --task <task> [--db <path>] [--embedding http|command|deterministic]
   looppilot benchmark --events <events.jsonl> [--errors <error.log>] [--harness <name>] [--embedding http|command|deterministic]
   looppilot observe --events <events.jsonl> [--output <shadow.jsonl>] [--from-start true]
+  looppilot observe --stats [--output <shadow.jsonl>]
   looppilot serve --transport <http|mcp> [--port 8191] [--db <path>] [--embedding http|command|deterministic]
 
 Embedding options:

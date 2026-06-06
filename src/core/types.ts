@@ -1,6 +1,8 @@
 export type EpisodeOutcome = 'success' | 'error' | 'unknown';
 export type Confidence = 'low' | 'medium' | 'high';
 export type Risk = 'low' | 'medium' | 'high' | 'unknown';
+export type RichEpisodeOutcome = 'success' | 'failure' | 'partial';
+export type RichEpisodeLabel = 'efficient' | 'wasteful' | 'hit-cap' | 'error';
 
 export interface ToolCallEpisode {
   episodeId: string;
@@ -19,6 +21,41 @@ export interface ToolCallEpisode {
   neededContinuation: boolean;
   failureLabels: string[];
   rawSource?: Record<string, unknown>;
+}
+
+export interface RichEpisode {
+  runId: string;
+  sessionId: string;
+  source: string;
+  task: string;
+  actualToolCalls: number;
+  actualToolChain: string[];
+  hitMaxIterations: boolean;
+  durationMs: number;
+  outcome: RichEpisodeOutcome;
+  timeOfDay: number;
+  dayOfWeek: number;
+  taskWordCount: number;
+  taskCharCount: number;
+  taskQuestionMarks: number;
+  taskHasCodeBlock: boolean;
+  taskHasUrl: boolean;
+  isScheduledJob: boolean;
+  sessionRunIndex: number;
+  previousRunToolCount: number | null;
+  previousRunOutcome: string | null;
+  previousRunDurationMs: number | null;
+  uniqueToolsUsed: string[];
+  uniqueToolCount: number;
+  toolErrors: number;
+  toolErrorNames: string[];
+  responseCharCount: number | null;
+  predictedBudget: number | null;
+  predictedConfidence: Confidence | 'none' | null;
+  predictedTools: string[] | null;
+  knnTopSimilarity: number | null;
+  knnNeighborCount: number | null;
+  outcomeLabel: RichEpisodeLabel;
 }
 
 export interface StoredEpisode extends ToolCallEpisode {
