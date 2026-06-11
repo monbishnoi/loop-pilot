@@ -6,6 +6,8 @@
 
 We're testing this. You can too.
 
+Start with logs. KNN works immediately. A small learned model becomes useful once you have enough local trajectories. The model is not the agent; it is the harness's learned judgment layer.
+
 ---
 
 ## The Question
@@ -83,8 +85,19 @@ With enough labeled episodes, ask:
 
 - Does KNN similarity on task embeddings predict tool budgets that correlate with good outcomes?
 - Would a lightweight neural net outperform KNN?
+- Would a small Transformer over raw task text outperform both KNN and an embedding-based neural net?
+- Would a hybrid model — task text plus structured runtime signals — outperform the pure text and pure feature baselines?
 - What's the minimum corpus size for useful predictions?
 - Does `tool_chain` sequence matching (suggested by [@kehansama](https://github.com/anthropics/claude-code/issues/65712#issuecomment-2934938693)) improve prediction over task-description similarity alone?
+
+Phase 2 is a ladder, not a bet on one model:
+
+1. Fixed-budget and historical-average baselines
+2. KNN over similar past episodes
+3. Small learned model over embeddings and structured harness signals
+4. Hybrid model combining task text, metadata, tool history, and runtime/error patterns
+
+The prediction target also broadens over time: budget quantiles, likely tools, risk heads, routing decisions, and eventually real-time steering signals while the loop is running.
 
 **Entry criteria:** Phase 1 has collected enough labeled episodes to run statistically meaningful validation.
 
