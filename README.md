@@ -64,7 +64,15 @@ looppilot index \
   --dimensions 768
 
 # Run observer (shadow mode — predicts but doesn't inject)
-looppilot serve --transport http --port 8191 --observe-only
+looppilot observe \
+  --events /path/to/your-harness/data/events.jsonl \
+  --output data/shadow-observations.jsonl
+
+# Cal Strands: include active session inventory when available
+looppilot observe \
+  --events /path/to/cal-gateway/data/events.jsonl \
+  --output data/shadow-observations.jsonl \
+  --cal-sessions-url http://127.0.0.1:8080/api/observer/sessions
 ```
 
 ### Phase 2: Validate 📊

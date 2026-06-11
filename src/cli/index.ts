@@ -10,6 +10,7 @@ import {
   type EmbeddingProvider,
   LoopPilot,
   SqliteEpisodeStore,
+  backfillShadowObservations,
   collectShadowObservationStats,
   formatShadowObservationStats,
   importBehaviorCollections,
@@ -34,8 +35,9 @@ try {
 
 async function main(argv: string[]): Promise<void> {
   const [command] = argv;
-  const subcommand = command === 'import' || command === 'collection' ? argv[1] : undefined;
-  const rest = command === 'import' || command === 'collection' ? argv.slice(2) : argv.slice(1);
+  const hasSubcommand = command === 'import' || command === 'collection' || command === 'backfill';
+  const subcommand = hasSubcommand ? argv[1] : undefined;
+  const rest = hasSubcommand ? argv.slice(2) : argv.slice(1);
   const parsed = parseCliValues(rest);
   const options = parsed.options;
   const dbPath = resolve(options.db ?? 'data/looppilot.sqlite');
@@ -108,6 +110,23 @@ async function main(argv: string[]): Promise<void> {
     throw new Error(`Unknown collection command "${subcommand ?? ''}". Use scan, init, parse, or import.`);
   }
 
+  if (command === 'backfill') {
+    if (subcommand === 'shadow-observations') {
+      const result = await backfillShadowObservations({
+        observationsPath: resolve(options.observations ?? 'data/shadow-observations.jsonl'),
+        eventsPath: resolve(options.events ?? '/Users/I306141/harness/cal-gateway/data/events.jsonl'),
+        errorsPath: options.errors === 'false'
+          ? undefined
+          : resolve(options.errors ?? '/Users/I306141/harness/cal-gateway/logs/pm2-error.log'),
+        outputPath: resolve(options.output ?? 'data/shadow-observations-enriched.jsonl'),
+      });
+      console.log(JSON.stringify(result, null, 2));
+      return;
+    }
+
+    throw new Error(`Unknown backfill command "${subcommand ?? ''}". Use shadow-observations.`);
+  }
+
   if (command === 'index') {
     console.log(JSON.stringify(await loopPilot.indexEpisodes(), null, 2));
     return;
@@ -153,6 +172,8 @@ async function main(argv: string[]): Promise<void> {
       fromStart: options.fromStart === 'true',
       harness: options.harness ?? 'jsonl-events',
       maxBudget: optionalNumber(options.maxBudget),
+      calSessionsUrl: options.calSessionsUrl,
+      pollSessionsMs: optionalNumber(options.pollSessionsMs),
     });
     return;
   }
@@ -288,11 +309,13 @@ Commands:
   looppilot collection init [root] [--output looppilot.collections.json]
   looppilot collection parse [--config looppilot.collections.json] [--sample 3]
   looppilot collection import [--config looppilot.collections.json] [--db <path>]
+  looppilot backfill shadow-observations [--observations data/shadow-observations.jsonl] [--events <events.jsonl>] [--errors <pm2-error.log>] [--output data/shadow-observations-enriched.jsonl]
   looppilot import events --events <events.jsonl> [--errors <error.log>] [--harness <name>] [--db <path>] [--embedding http|command|deterministic]
   looppilot index [--db <path>] [--embedding http|command|deterministic]
   looppilot plan --task <task> [--db <path>] [--embedding http|command|deterministic]
   looppilot benchmark --events <events.jsonl> [--errors <error.log>] [--harness <name>] [--embedding http|command|deterministic]
   looppilot observe --events <events.jsonl> [--output <shadow.jsonl>] [--from-start true]
+  looppilot observe --events <events.jsonl> --cal-sessions-url http://127.0.0.1:8080/api/observer/sessions
   looppilot observe --stats [--output <shadow.jsonl>]
   looppilot serve --transport <http|mcp> [--port 8191] [--db <path>] [--embedding http|command|deterministic]
 

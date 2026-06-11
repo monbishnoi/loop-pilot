@@ -10,6 +10,7 @@ import {
   LoopPilot,
   LoopPilotObserver,
   SqliteEpisodeStore,
+  backfillShadowObservations,
   buildEpisodesFromJsonlEvents,
   collectShadowObservationStats,
   createPromptGuidance,
@@ -64,6 +65,37 @@ test('JSONL event parser groups events into behavior episodes and enriches max-i
     budgetRange: { min: 2, max: 5 },
     confidence: 'medium',
   });
+});
+
+test('JSONL event parser captures per-tool timing and error categories', () => {
+  const episodes = buildEpisodesFromJsonlEvents([
+    eventAt('message_received', 'run-tools', '2026-06-04T17:00:00.000Z', { text: 'Fetch the status' }),
+    eventAt('run_started', 'run-tools', '2026-06-04T17:00:01.000Z'),
+    eventAt('tool_call_started', 'run-tools', '2026-06-04T17:00:02.000Z', {
+      tool: 'bash',
+      toolUseId: 'tool-1',
+      input: { command: 'curl https://example.invalid/status' },
+    }),
+    eventAt('tool_call_finished', 'run-tools', '2026-06-04T17:00:05.250Z', {
+      tool: 'bash',
+      toolUseId: 'tool-1',
+      isError: true,
+      errorCategory: 'network',
+      errorMessage: 'fetch failed because DNS resolution failed',
+    }),
+    eventAt('run_finished', 'run-tools', '2026-06-04T17:00:06.000Z'),
+  ]);
+
+  assert.equal(episodes.length, 1);
+  assert.deepEqual(episodes[0].toolsUsed, ['bash']);
+  assert.equal(episodes[0].toolCalls?.length, 1);
+  assert.equal(episodes[0].toolCalls?.[0].id, 'tool-1');
+  assert.equal(episodes[0].toolCalls?.[0].durationMs, 3250);
+  assert.equal(episodes[0].toolCalls?.[0].isError, true);
+  assert.equal(episodes[0].toolCalls?.[0].errorCategory, 'network');
+  assert.equal(episodes[0].toolCalls?.[0].inputSummary?.commandLength, 'curl https://example.invalid/status'.length);
+  assert.deepEqual(episodes[0].toolErrorCategories, ['network']);
+  assert.deepEqual(episodes[0].failureLabels, ['tool_error:bash:network']);
 });
 
 test('LoopPilot stores, indexes, plans, and generates guidance', async () => {
@@ -355,6 +387,11 @@ test('standalone observer enriches v2 outcomes with rich episode fields and sess
     assert.equal(second.previousRunDurationMs, 4000);
     assert.equal(second.actualToolCalls, 1);
     assert.deepEqual(second.actualToolChain, ['fetch']);
+    assert.equal(second.toolCalls.length, 1);
+    assert.equal(second.toolCalls[0].durationMs, 1000);
+    assert.equal(second.toolCalls[0].isError, true);
+    assert.equal(second.toolCalls[0].errorMessage, 'network');
+    assert.deepEqual(second.actual.toolCalls, second.toolCalls);
     assert.deepEqual(second.uniqueToolsUsed, ['fetch']);
     assert.equal(second.uniqueToolCount, 1);
     assert.equal(second.toolErrors, 1);
@@ -389,6 +426,105 @@ test('standalone observer enriches v2 outcomes with rich episode fields and sess
   }
 });
 
+test('backfill writes an enriched shadow observation file without replacing source', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'looppilot-backfill-'));
+  const observationsPath = join(dir, 'shadow-observations.jsonl');
+  const eventsPath = join(dir, 'events.jsonl');
+  const errorsPath = join(dir, 'pm2-error.log');
+  const outputPath = join(dir, 'shadow-observations-enriched.jsonl');
+
+  try {
+    await writeFile(observationsPath, [
+      JSON.stringify({ type: 'prediction', experiment: 'loop_pilot_standalone_shadow_v2', runId: 'run-1' }),
+      JSON.stringify({
+        type: 'outcome',
+        experiment: 'loop_pilot_standalone_shadow_v2',
+        runId: 'run-1',
+        sessionId: 'monika-main',
+        actual: { toolCallCount: 1, toolsUsed: ['read_notes'] },
+      }),
+    ].join('\n') + '\n', 'utf8');
+    await writeFile(eventsPath, [
+      JSON.stringify(eventAt('message_received', 'run-1', '2026-06-04T17:00:00.000Z', { text: 'Read notes' })),
+      JSON.stringify(eventAt('run_started', 'run-1', '2026-06-04T17:00:01.000Z')),
+      JSON.stringify(eventAt('tool_call_started', 'run-1', '2026-06-04T17:00:02.000Z', { tool: 'read_notes', toolUseId: 'tool-1' })),
+      JSON.stringify(eventAt('tool_call_finished', 'run-1', '2026-06-04T17:00:32.000Z', { tool: 'read_notes', toolUseId: 'tool-1', isError: true })),
+      JSON.stringify(eventAt('run_error', 'run-1', '2026-06-04T17:00:33.000Z', { error: 'failed' })),
+    ].join('\n') + '\n', 'utf8');
+    await writeFile(errorsPath, JSON.stringify({
+      message: JSON.stringify({
+        ts: '2026-06-04T17:00:32.000Z',
+        event: 'tool_timeout',
+        session: 'monika-main',
+        tool: 'read_notes',
+        error: 'Failed to read notes: spawnSync /bin/bash ETIMEDOUT',
+      }),
+      timestamp: '2026-06-04 10:00:32 -07:00',
+    }) + '\n', 'utf8');
+
+    const result = await backfillShadowObservations({ observationsPath, eventsPath, errorsPath, outputPath });
+    const original = await readFile(observationsPath, 'utf8');
+    const enriched = (await readFile(outputPath, 'utf8')).trim().split('\n').map((line) => JSON.parse(line));
+    const outcome = enriched[1];
+
+    assert.equal(result.inputRecords, 2);
+    assert.equal(result.outcomeRecords, 1);
+    assert.equal(result.matchedOutcomeRecords, 1);
+    assert.equal(result.enrichedToolCalls, 1);
+    assert.equal(original.includes('toolCalls'), false);
+    assert.equal(outcome.toolCalls[0].durationMs, 30000);
+    assert.equal(outcome.toolCalls[0].errorCategory, 'timeout');
+    assert.equal(outcome.toolCalls[0].errorMessage, 'Failed to read notes: spawnSync /bin/bash ETIMEDOUT');
+    assert.deepEqual(outcome.toolErrorCategories, ['timeout']);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('standalone observer tags observations from multiple active Cal sessions', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'looppilot-multi-session-observer-'));
+  const dbPath = join(dir, 'looppilot.sqlite');
+  const outputPath = join(dir, 'shadow.jsonl');
+
+  try {
+    const loopPilot = await createLoopPilot(dbPath);
+    await loopPilot.importEpisodes([
+      episode('hist-1', 'Draft a short note', ['write_file'], 1),
+      episode('hist-2', 'Search notes for context', ['search'], 1),
+      episode('hist-3', 'Prepare a plan', ['read_file'], 1),
+    ]);
+    await loopPilot.indexEpisodes();
+
+    const observer = new LoopPilotObserver(loopPilot, { outputPath, eventsPath: 'unused', harness: 'test' });
+    observer.setActiveSessions([
+      { sessionId: 'monika-main', name: 'Cal', permanent: true, messageCount: 10 },
+      { sessionId: 'strand-1', name: 'Strand', permanent: false, messageCount: 2 },
+    ]);
+
+    await observer.processEvent(eventForSession('message_received', 'run-main', 'monika-main', { text: 'Draft a short note' }));
+    await observer.processEvent(eventForSession('run_started', 'run-main', 'monika-main'));
+    await observer.processEvent(eventForSession('run_finished', 'run-main', 'monika-main'));
+
+    await observer.processEvent(eventForSession('message_received', 'run-strand', 'strand-1', { text: 'Search notes for context' }));
+    await observer.processEvent(eventForSession('run_started', 'run-strand', 'strand-1'));
+    await observer.processEvent(eventForSession('run_finished', 'run-strand', 'strand-1'));
+
+    const records = (await readFile(outputPath, 'utf8'))
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line));
+    const outcomes = records.filter((record) => record.type === 'outcome');
+
+    assert.equal(outcomes.length, 2);
+    assert.deepEqual(outcomes.map((record) => record.sessionId), ['monika-main', 'strand-1']);
+    assert.deepEqual(outcomes.map((record) => record.sessionName), ['Cal', 'Strand']);
+    assert.equal(outcomes[0].activeSessionCount, 2);
+    assert.equal(outcomes[1].activeSessionCount, 2);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 async function createLoopPilot(dbPath: string): Promise<LoopPilot> {
   const loopPilot = new LoopPilot({
     store: new SqliteEpisodeStore({ dbPath }),
@@ -407,6 +543,13 @@ function event(type: string, runId: string, payload: Record<string, unknown> = {
     runId,
     source: 'test',
     payload,
+  };
+}
+
+function eventForSession(type: string, runId: string, sessionId: string, payload: Record<string, unknown> = {}) {
+  return {
+    ...event(type, runId, payload),
+    sessionId,
   };
 }
 

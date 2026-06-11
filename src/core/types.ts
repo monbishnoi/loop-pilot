@@ -3,6 +3,29 @@ export type Confidence = 'low' | 'medium' | 'high';
 export type Risk = 'low' | 'medium' | 'high' | 'unknown';
 export type RichEpisodeOutcome = 'success' | 'failure' | 'partial';
 export type RichEpisodeLabel = 'efficient' | 'wasteful' | 'hit-cap' | 'error';
+export type ToolErrorCategory = 'timeout' | 'command_error' | 'network' | 'corruption' | 'context_exhaustion' | 'unknown';
+
+export interface ToolInputSummary {
+  kind: string;
+  charCount: number;
+  preview: string;
+  commandLength?: number;
+  commandPreview?: string;
+}
+
+export interface ToolCallRecord {
+  index: number;
+  id?: string | null;
+  tool: string;
+  startedAt?: string | null;
+  finishedAt?: string | null;
+  durationMs?: number | null;
+  isError: boolean;
+  errorCategory?: ToolErrorCategory | null;
+  errorMessage?: string | null;
+  inputSummary?: ToolInputSummary | null;
+  iteration?: string | number | null;
+}
 
 export interface ToolCallEpisode {
   episodeId: string;
@@ -14,8 +37,10 @@ export interface ToolCallEpisode {
   finishedAt?: string | null;
   durationMs?: number | null;
   toolsUsed: string[];
+  toolCalls?: ToolCallRecord[];
   toolCallCount: number;
   toolErrors: string[];
+  toolErrorCategories?: ToolErrorCategory[];
   outcome: EpisodeOutcome;
   hitMaxIterations: boolean;
   neededContinuation: boolean;
@@ -30,6 +55,7 @@ export interface RichEpisode {
   task: string;
   actualToolCalls: number;
   actualToolChain: string[];
+  toolCalls?: ToolCallRecord[];
   hitMaxIterations: boolean;
   durationMs: number;
   outcome: RichEpisodeOutcome;
@@ -49,6 +75,7 @@ export interface RichEpisode {
   uniqueToolCount: number;
   toolErrors: number;
   toolErrorNames: string[];
+  toolErrorCategories?: ToolErrorCategory[];
   responseCharCount: number | null;
   predictedBudget: number | null;
   predictedConfidence: Confidence | 'none' | null;

@@ -14,6 +14,8 @@ export interface ObserverOptions {
   fromStart?: boolean;
   harness?: string;
   maxBudget?: number;
+  calSessionsUrl?: string;
+  pollSessionsMs?: number;
 }
 
 export class LoopPilotObserver {
@@ -24,6 +26,7 @@ export class LoopPilotObserver {
   private readonly sessionRuns = new Map<string, PreviousRunInfo[]>();
   private readonly plannedRuns = new Set<string>();
   private readonly completedRuns = new Set<string>();
+  private readonly activeSessions = new Map<string, ObserverSession>();
 
   constructor(loopPilot: LoopPilot, options: ObserverOptions) {
     this.loopPilot = loopPilot;
@@ -50,6 +53,15 @@ export class LoopPilotObserver {
     }
   }
 
+  setActiveSessions(sessions: ObserverSession[]): void {
+    this.activeSessions.clear();
+    for (const session of sessions) {
+      if (session.sessionId) {
+        this.activeSessions.set(session.sessionId, session);
+      }
+    }
+  }
+
   private async recordPrediction(event: JsonlRunEvent): Promise<void> {
     if (!event.runId || this.plannedRuns.has(event.runId)) return;
     if (typeof event.payload?.text !== 'string') return;
@@ -68,6 +80,8 @@ export class LoopPilotObserver {
       timestamp: new Date().toISOString(),
       runId: event.runId,
       sessionId: event.sessionId ?? null,
+      sessionName: this.sessionNameFor(event.sessionId),
+      activeSessionCount: this.activeSessions.size || null,
       source: event.source ?? 'unknown',
       injected: false,
       task: event.payload.text,
@@ -106,19 +120,28 @@ export class LoopPilotObserver {
       experiment: SHADOW_EXPERIMENT_V2,
       timestamp: new Date().toISOString(),
       injected: false,
+      sessionName: this.sessionNameFor(richEpisode.sessionId),
+      activeSessionCount: this.activeSessions.size || null,
       ...richEpisode,
       actual: {
         toolCallCount: episode.toolCallCount,
         toolsUsed: episode.toolsUsed,
+        toolCalls: episode.toolCalls ?? [],
         outcome: episode.outcome,
         hitMaxIterations: episode.hitMaxIterations,
         durationMs: episode.durationMs,
         failureLabels: episode.failureLabels,
+        toolErrorCategories: episode.toolErrorCategories ?? [],
         responseCharCount: episode.rawSource?.responseCharCount ?? null,
       },
       prediction,
       reward: prediction ? scorePrediction(prediction, episode.toolCallCount, episode.outcome, episode.hitMaxIterations) : null,
     });
+  }
+
+  private sessionNameFor(sessionId: string | null | undefined): string | null {
+    if (!sessionId) return null;
+    return this.activeSessions.get(sessionId)?.name ?? null;
   }
 }
 
@@ -126,6 +149,14 @@ interface PreviousRunInfo {
   toolCount: number;
   outcome: string;
   durationMs: number;
+}
+
+export interface ObserverSession {
+  sessionId: string;
+  name?: string;
+  status?: string;
+  permanent?: boolean;
+  messageCount?: number;
 }
 
 export interface ShadowObservationStats {
@@ -155,7 +186,7 @@ function buildRichEpisode(
   const message = sortedEvents.find((event) => event.type === 'message_received');
   const runStarted = sortedEvents.find((event) => event.type === 'run_started') ?? sortedEvents[0];
   const responseComplete = [...sortedEvents].reverse().find((event) => event.type === 'response_complete');
-  const toolFinishes = sortedEvents.filter((event) => event.type === 'tool_call_finished');
+  const toolCalls = episode.toolCalls ?? [];
   const timestamp = parseTimestamp(runStarted?.timestamp ?? message?.timestamp ?? episode.startedAt ?? new Date().toISOString());
   const sessionId = episode.sessionId ?? message?.sessionId ?? runStarted?.sessionId ?? 'unknown';
   const previousRuns = sessionRuns.get(sessionId) ?? [];
@@ -163,9 +194,11 @@ function buildRichEpisode(
   const task = episode.task;
   const actualToolChain = episode.toolsUsed;
   const uniqueToolsUsed = [...new Set(actualToolChain)];
-  const toolErrorNames = toolFinishes
-    .filter(hasToolError)
-    .map((event) => String(event.payload?.tool ?? 'unknown'));
+  const toolErrorRecords = toolCalls.filter((call) => call.isError);
+  const toolErrorNames = toolErrorRecords.map((call) => call.tool);
+  const toolErrorCategories = toolErrorRecords
+    .map((call) => call.errorCategory)
+    .filter((category): category is NonNullable<typeof category> => Boolean(category));
   const outcome = normalizeOutcome(episode.outcome);
   const predictedBudget = prediction?.suggestedBudget ?? null;
 
@@ -176,6 +209,7 @@ function buildRichEpisode(
     task,
     actualToolCalls: episode.toolCallCount,
     actualToolChain,
+    toolCalls,
     hitMaxIterations: episode.hitMaxIterations || episode.toolCallCount >= 10,
     durationMs: episode.durationMs ?? 0,
     outcome,
@@ -195,6 +229,7 @@ function buildRichEpisode(
     uniqueToolCount: uniqueToolsUsed.length,
     toolErrors: toolErrorNames.length,
     toolErrorNames,
+    toolErrorCategories,
     responseCharCount: typeof responseComplete?.payload?.text === 'string' ? responseComplete.payload.text.length : null,
     predictedBudget,
     predictedConfidence: prediction?.confidence ?? null,
@@ -285,6 +320,9 @@ export function formatShadowObservationStats(stats: ShadowObservationStats): str
 export async function observeEventLog(loopPilot: LoopPilot, options: ObserverOptions): Promise<void> {
   const observer = new LoopPilotObserver(loopPilot, options);
   const pollMs = options.pollMs ?? 2000;
+  const sessionPoller = options.calSessionsUrl
+    ? new CalSessionPoller(options.calSessionsUrl, options.pollSessionsMs ?? pollMs)
+    : null;
   let offset = options.fromStart ? 0 : await fileSize(options.eventsPath);
   let stopped = false;
 
@@ -295,12 +333,54 @@ export async function observeEventLog(loopPilot: LoopPilot, options: ObserverOpt
   process.once('SIGTERM', stop);
 
   while (!stopped) {
+    if (sessionPoller) {
+      const sessions = await sessionPoller.pollIfDue();
+      if (sessions) observer.setActiveSessions(sessions);
+    }
+
     const next = await readNewBytes(options.eventsPath, offset);
     offset = next.offset;
     for (const event of parseEventLines(next.text)) {
       await observer.processEvent(event);
     }
     await sleep(pollMs);
+  }
+}
+
+class CalSessionPoller {
+  private readonly url: string;
+  private readonly pollMs: number;
+  private nextPollAt = 0;
+  private lastSessions: ObserverSession[] | null = null;
+
+  constructor(url: string, pollMs: number) {
+    this.url = url;
+    this.pollMs = pollMs;
+  }
+
+  async pollIfDue(): Promise<ObserverSession[] | null> {
+    const now = Date.now();
+    if (now < this.nextPollAt) return this.lastSessions;
+
+    this.nextPollAt = now + this.pollMs;
+    try {
+      const response = await fetch(this.url);
+      if (!response.ok) return this.lastSessions;
+      const body = await response.json() as { sessions?: ObserverSession[] };
+      if (!Array.isArray(body.sessions)) return this.lastSessions;
+      this.lastSessions = body.sessions
+        .filter((session) => typeof session.sessionId === 'string')
+        .map((session) => ({
+          sessionId: session.sessionId,
+          name: typeof session.name === 'string' ? session.name : undefined,
+          status: typeof session.status === 'string' ? session.status : undefined,
+          permanent: typeof session.permanent === 'boolean' ? session.permanent : undefined,
+          messageCount: typeof session.messageCount === 'number' ? session.messageCount : undefined,
+        }));
+      return this.lastSessions;
+    } catch {
+      return this.lastSessions;
+    }
   }
 }
 
@@ -361,10 +441,6 @@ function labelOutcome(
   if (outcome === 'success' && predictedBudget != null && actualToolCalls > predictedBudget + 3) return 'wasteful';
   if (outcome === 'success' && (predictedBudget == null || actualToolCalls <= predictedBudget + 2)) return 'efficient';
   return 'wasteful';
-}
-
-function hasToolError(event: JsonlRunEvent): boolean {
-  return event.payload?.isError === true || event.payload?.error != null;
 }
 
 function parseTimestamp(value: string): Date {

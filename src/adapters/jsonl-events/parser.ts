@@ -1,5 +1,5 @@
 import { readFile } from 'node:fs/promises';
-import type { ToolCallEpisode } from '../../core/types.js';
+import type { ToolCallEpisode, ToolCallRecord, ToolErrorCategory, ToolInputSummary } from '../../core/types.js';
 
 export interface JsonlRunEvent {
   seq?: number;
@@ -90,14 +90,20 @@ export function buildEpisodesFromJsonlEvents(
     const task = message.payload.text;
     const sessionId = message.sessionId ?? runStarted?.sessionId ?? null;
     const matchedMaxIteration = findMaxIterationMatch(task, sessionId, maxIterationLogs);
-    const toolErrors = toolFinishes
-      .filter((event) => event.payload?.isError === true)
-      .map((event) => String(event.payload?.tool ?? 'unknown'));
+    const toolCalls = buildToolCalls(toolStarts, toolFinishes);
+    const toolErrors = toolCalls
+      .filter((call) => call.isError)
+      .map((call) => call.tool);
+    const toolErrorCategories = toolCalls
+      .filter((call) => call.isError && call.errorCategory)
+      .map((call) => call.errorCategory as ToolErrorCategory);
 
     const failureLabels = [
       ...(runError ? ['run_error'] : []),
       ...(matchedMaxIteration ? ['max_iterations'] : []),
-      ...toolErrors.map((tool) => `tool_error:${tool}`),
+      ...toolCalls
+        .filter((call) => call.isError)
+        .map((call) => `tool_error:${call.tool}${call.errorCategory ? `:${call.errorCategory}` : ''}`),
     ];
 
     episodes.push({
@@ -109,9 +115,11 @@ export function buildEpisodesFromJsonlEvents(
       startedAt: runStarted?.timestamp ?? null,
       finishedAt: terminal?.timestamp ?? null,
       durationMs: durationMs(runStarted?.timestamp, terminal?.timestamp),
-      toolsUsed: toolStarts.map((event) => String(event.payload?.tool ?? 'unknown')),
+      toolsUsed: toolCalls.map((call) => call.tool),
+      toolCalls,
       toolCallCount: toolStarts.length,
       toolErrors,
+      toolErrorCategories,
       outcome: runError || matchedMaxIteration ? 'error' : terminal?.type === 'run_finished' ? 'success' : 'unknown',
       hitMaxIterations: Boolean(matchedMaxIteration),
       neededContinuation: /\b(continue|keep going|go on)\b/i.test(task),
@@ -131,6 +139,49 @@ export function buildEpisodesFromJsonlEvents(
   return episodes.sort((a, b) => String(a.startedAt ?? '').localeCompare(String(b.startedAt ?? '')));
 }
 
+export function buildToolCalls(toolStarts: JsonlRunEvent[], toolFinishes: JsonlRunEvent[]): ToolCallRecord[] {
+  const remainingFinishes = [...toolFinishes];
+
+  return toolStarts.map((start, index) => {
+    const id = readToolUseId(start);
+    let finishIndex = -1;
+    if (id) {
+      finishIndex = remainingFinishes.findIndex((event) => readToolUseId(event) === id);
+    }
+    if (finishIndex < 0) {
+      const startTool = String(start.payload?.tool ?? 'unknown');
+      finishIndex = remainingFinishes.findIndex((event) => String(event.payload?.tool ?? 'unknown') === startTool);
+    }
+
+    const finish = finishIndex >= 0 ? remainingFinishes.splice(finishIndex, 1)[0] : null;
+    const payload = finish?.payload ?? {};
+    const startedAt = start.timestamp ?? null;
+    const finishedAt = finish?.timestamp ?? null;
+    const computedDuration = durationMs(startedAt ?? undefined, finishedAt ?? undefined);
+    const payloadDuration = typeof payload.durationMs === 'number' ? payload.durationMs : null;
+    const errorCategory = normalizeErrorCategory(payload.errorCategory);
+    const errorMessage = typeof payload.errorMessage === 'string'
+      ? truncate(payload.errorMessage, 200)
+      : typeof payload.error === 'string'
+        ? truncate(payload.error, 200)
+        : null;
+
+    return {
+      index,
+      id: id ?? readToolUseId(finish) ?? null,
+      tool: String(start.payload?.tool ?? finish?.payload?.tool ?? 'unknown'),
+      startedAt,
+      finishedAt,
+      durationMs: payloadDuration ?? computedDuration,
+      isError: payload.isError === true || payload.error != null || payload.errorMessage != null,
+      errorCategory,
+      errorMessage,
+      inputSummary: readInputSummary(start.payload),
+      iteration: normalizeIteration(payload.iteration ?? start.payload?.iteration),
+    };
+  });
+}
+
 function findMaxIterationMatch(task: string, sessionId: string | null, logs: MaxIterationLog[]): MaxIterationLog | null {
   const normalizedTask = normalize(task);
   for (const log of logs) {
@@ -148,6 +199,83 @@ function durationMs(start?: string, end?: string): number | null {
   if (!start || !end) return null;
   const value = new Date(end).getTime() - new Date(start).getTime();
   return Number.isFinite(value) && value >= 0 ? value : null;
+}
+
+function readToolUseId(event: JsonlRunEvent | null | undefined): string | null {
+  const id = event?.payload?.toolUseId ?? event?.payload?.tool_use_id ?? event?.payload?.id;
+  return typeof id === 'string' && id ? id : null;
+}
+
+function readInputSummary(payload: Record<string, unknown> | undefined): ToolInputSummary | null {
+  const existing = payload?.inputSummary;
+  if (existing && typeof existing === 'object' && !Array.isArray(existing)) {
+    const summary = existing as Record<string, unknown>;
+    return {
+      kind: typeof summary.kind === 'string' ? summary.kind : 'unknown',
+      charCount: typeof summary.charCount === 'number' ? summary.charCount : 0,
+      preview: typeof summary.preview === 'string' ? truncate(summary.preview, 50) : '',
+      commandLength: typeof summary.commandLength === 'number' ? summary.commandLength : undefined,
+      commandPreview: typeof summary.commandPreview === 'string' ? truncate(summary.commandPreview, 50) : undefined,
+    };
+  }
+
+  const input = payload?.input;
+  if (input == null) return null;
+  if (typeof input === 'string') {
+    return {
+      kind: 'string',
+      charCount: input.length,
+      preview: truncate(input, 50),
+    };
+  }
+  if (typeof input === 'object' && !Array.isArray(input)) {
+    const inputRecord = input as Record<string, unknown>;
+    const command = inputRecord.command;
+    const serialized = safeStringify(inputRecord);
+    return {
+      kind: 'object',
+      charCount: serialized.length,
+      preview: truncate(serialized, 50),
+      commandLength: typeof command === 'string' ? command.length : undefined,
+      commandPreview: typeof command === 'string' ? truncate(command, 50) : undefined,
+    };
+  }
+  const serialized = safeStringify(input);
+  return {
+    kind: Array.isArray(input) ? 'array' : typeof input,
+    charCount: serialized.length,
+    preview: truncate(serialized, 50),
+  };
+}
+
+function normalizeErrorCategory(value: unknown): ToolErrorCategory | null {
+  if (
+    value === 'timeout' ||
+    value === 'command_error' ||
+    value === 'network' ||
+    value === 'corruption' ||
+    value === 'context_exhaustion' ||
+    value === 'unknown'
+  ) {
+    return value;
+  }
+  return null;
+}
+
+function normalizeIteration(value: unknown): string | number | null {
+  return typeof value === 'string' || typeof value === 'number' ? value : null;
+}
+
+function truncate(value: string, max: number): string {
+  return value.length <= max ? value : value.slice(0, max);
+}
+
+function safeStringify(value: unknown): string {
+  try {
+    return JSON.stringify(value) ?? String(value);
+  } catch {
+    return String(value);
+  }
 }
 
 function normalize(value: string): string {
